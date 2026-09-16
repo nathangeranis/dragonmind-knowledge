@@ -102,7 +102,23 @@ Two-scope integration tests pin both stores.
 
 ### Keeping token spend down
 
-Most agent spend is prompt tokens, and two design choices in the orchestration layer target it. Structured model output uses a compact, header-counted tabular notation instead of YAML. Every agent call carries only the response schema for its own request type, never a shared schema for all of them. That code lives in the private repository. This layer stays model-agnostic: it needs only an `IEmbeddingGenerator`, and it enforces the vector width (1536) whatever the provider returns.
+Structured model output uses a compact, header-counted tabular notation instead of YAML, and every agent call carries only the response schema for its own request type rather than a shared schema for all of them. That code lives in the private repository.
+
+The notation is measured rather than taken on trust: its advertised savings are quoted against JSON, and what it replaced here was YAML, which is already compact. Rendering the same prompt builders and serialising the same payloads either side of the migration commit — over 120 real turns and 602 real graph edges from a development database, counted with the o200k vocabulary and cross-checked against the provider's own `countTokens` endpoint:
+
+| Emitted payload | 3 rows | 10 rows | 25 rows |
+|---|---|---|---|
+| Graph updates (uniform three-field rows) | −27.5% | −39.5% | −43.4% |
+| State diffs | −37.5% | −45.8% | — |
+| Lore facts (prose-dominated rows) | −3.2% | −7.5% | −11.3% |
+
+The saving is in what the model **emits**, and it comes from amortising one header across many uniform rows: a single row saves almost nothing, and the curve plateaus around 41–44%. Rows whose bulk is prose barely move, because no encoding compresses a sentence.
+
+The prompt *instructions* went the other way. The tabular format's rules block is longer than the YAML one it replaced, costing roughly 4.7% more input tokens per turn. That is a good trade here only because emitted rows outnumber the fixed instruction block; on an agent that returned one row per call it would not be.
+
+The two tokenizers agreed closely throughout — −38.2% against −39.5% on the same ten-row payload.
+
+This layer stays model-agnostic: it needs only an `IEmbeddingGenerator`, and it enforces the vector width (1536) whatever the provider returns.
 
 ## License
 
