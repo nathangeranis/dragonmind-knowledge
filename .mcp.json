@@ -1,0 +1,16 @@
+﻿{
+    "mcpServers":  {
+                       "knowledgebase":  {
+                                             "command":  "docker",
+                                             "args":  [
+                                                          "exec",
+                                                          "--interactive",
+                                                          "--env",
+                                                          "DATABASE_PATH=/db/dragonmind.db",
+                                                          "knowledgebase-mcp",
+                                                          "dotnet",
+                                                          "/app/KnowledgeBaseServer.dll"
+                                                      ]
+                                         }
+                   }
+}

@@ -1,0 +1,40 @@
+name: dragonmind-knowledge
+services:
+  db:
+    build: ./docker/postgres
+    image: dragonmind-knowledge-postgres:local
+    command: ["postgres", "-c", "shared_preload_libraries=age"]
+    environment:
+      POSTGRES_DB: knowledge
+      POSTGRES_USER: knowledge
+      POSTGRES_HOST_AUTH_METHOD: trust   # local-only container, bound to 127.0.0.1 below
+    ports:
+      - "127.0.0.1:${KNOWLEDGE_DB_PORT:-5455}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledge -d knowledge"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  tests:
+    profiles: ["test"]
+    build: { context: ., dockerfile: docker/tests/Dockerfile }
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      KNOWLEDGE_TEST_CONNECTION: "Host=db;Port=5432;Database=knowledge;Username=knowledge"
+  # Third-party knowledge-base MCP server (MIT, github.com/mbcrawfo/KnowledgeBaseServer) that .mcp.json
+  # wires coding agents to. Idle container; Claude Code starts the server per session with docker exec.
+  knowledgebase-mcp:
+    profiles: ["agents"]
+    image: mbcrawfo/knowledge-base-server@sha256:57fd0d387fa6ddd29b3cc1a2a8ee1d82f3b50ef38c13a3267d78fcca7f1115bd
+    container_name: knowledgebase-mcp
+    entrypoint: ["sleep"]
+    command: ["infinity"]
+    restart: unless-stopped
+    volumes:
+      - knowledgebase:/db
+volumes:
+  pgdata:
+  knowledgebase:

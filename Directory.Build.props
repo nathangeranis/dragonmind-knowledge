@@ -1,0 +1,69 @@
+<Project>
+
+  <!--
+    Solution-wide build settings. Every project inherits these; MSBuild imports the nearest
+    Directory.Build.props walking up from each .csproj, and this is the only one in the tree.
+
+    ==========================================================================================
+    EnforceCodeStyleInBuild - what it is here for
+    ==========================================================================================
+    The C# compiler no longer emits CS1998 ("This async method lacks 'await' operators and will
+    run synchronously"). It was not downgraded or suppressed - it was deleted from the compiler
+    in dotnet/roslyn#80144 (merged 2025-09-19), after dotnet/roslyn#77001 concluded the warning
+    was doing more harm than good: people were silencing it with meaningless
+    `await Task.FromResult(...)` calls, which cost a state machine and hide nothing.
+
+    Measured on this machine against an otherwise identical four-shape probe file:
+
+        SDK 9.0.120  / net9.0   CS1998 fires
+        SDK 10.0.400 / net10.0  silent
+        SDK 10.0.400 / net9.0   silent
+
+    Target framework and LangVersion make no difference; the SDK does. CI pins dotnet-version
+    10.0.x, so CI lost the diagnostic at the same time local builds did.
+
+    Roslyn shipped a replacement in dotnet/roslyn#81835 - IDE0390 and IDE0391 - but as an
+    opt-in IDE code-style analyzer rather than a compiler warning. Two things are needed to
+    make an IDE rule fail a command-line or CI build: this property, and an explicit severity
+    in .editorconfig. Neither alone is enough - with the property set but no severity entry,
+    IDE0390 produces nothing at build time even under AnalysisMode=All. The severities, and
+    the reasoning behind them, live in .editorconfig next to the CA rules they sit alongside.
+
+    Cost of turning this on: measured at zero. A full non-incremental build of this solution
+    with EnforceCodeStyleInBuild=true and no severity entries produced 674 warnings, not one of
+    them an IDExxxx - IDE rules stay silent at build time until a severity is set for them, so
+    this property opens the door for IDE0390/IDE0391 without admitting the rest of the catalog.
+  -->
+  <PropertyGroup>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <!--
+    ==========================================================================================
+    GenerateDocumentationFile - to make CS1570 (malformed XML doc) a build failure
+    ==========================================================================================
+    The compiler only parses /// comments as XML when it is asked to emit a documentation file.
+    Without this, a doc comment can carry unbalanced tags indefinitely: the build stays green,
+    -warnaserror stays green, and nothing notices until someone reads the file. That happened
+    twice here, both times from a scripted edit inserting a <para> pair into a <remarks> block
+    that was not paragraph-wrapped, and both times it was caught by eye rather than by a tool.
+
+    The point is CS1570 specifically - "badly formed XML". The completeness diagnostics are
+    suppressed, because this repository does not require every public member to carry a full doc
+    comment, only that whatever comments exist parse:
+
+      CS1591  missing XML comment for a publicly visible member (hundreds of them)
+      CS1573  some parameters documented, others not (16)
+      CS1574  cref pointing at something that will not resolve (10)
+
+    Leaving those on would, under the CI's -warnaserror, force a doc-completeness pass across the
+    whole tree to get a green build - a different job from this one, and not a prerequisite for
+    catching malformed XML. With them suppressed the tree builds clean and zero CS1570 remain, so
+    -warnaserror now turns any future malformed doc comment into a failed build.
+  -->
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CS1573;CS1574</NoWarn>
+  </PropertyGroup>
+
+</Project>
