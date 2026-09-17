@@ -112,7 +112,7 @@ The notation is measured rather than taken on trust: its advertised savings are 
 | State diffs | −37.5% | −45.8% | — |
 | Lore facts (prose-dominated rows) | −3.2% | −7.5% | −11.3% |
 
-The saving is in what the model **emits**, and it comes from amortising one header across many uniform rows: a single row saves almost nothing, and the curve plateaus around 41–44%. Rows whose bulk is prose barely move, because no encoding compresses a sentence.
+The saving is in what the model **emits**, and it comes from amortising one header across many uniform rows: a single row saves almost nothing, and the curve plateaus around 41–46%. Rows whose bulk is prose barely move, because no encoding compresses a sentence.
 
 The prompt *instructions* went the other way. The tabular format's rules block is longer than the YAML one it replaced, costing roughly 5% more input tokens per turn across the seven per-turn builders. That is a good trade here only because emitted rows outnumber the fixed instruction block; on an agent that returned one row per call it would not be.
 
