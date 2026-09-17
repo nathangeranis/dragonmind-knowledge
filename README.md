@@ -109,8 +109,8 @@ The notation is measured rather than taken on trust: its advertised savings are 
 | Emitted payload | 3 rows | 10 rows | 25 rows |
 |---|---|---|---|
 | Graph updates (uniform three-field rows) | −27.5% | −39.5% | −43.4% |
-| State diffs | −37.5% | −45.8% | — |
-| Lore facts (prose-dominated rows) | −3.2% | −7.5% | −11.3% |
+| Record updates (uniform field/value rows) | −37.5% | −45.8% | — |
+| Knowledge facts (prose-dominated rows) | −3.2% | −7.5% | −11.3% |
 
 The saving is in what the model **emits**, and it comes from amortising one header across many uniform rows: a single row saves almost nothing, and the curve plateaus around 41–46%. Rows whose bulk is prose barely move, because no encoding compresses a sentence.
 
