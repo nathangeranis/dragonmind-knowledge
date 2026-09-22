@@ -41,66 +41,13 @@ public sealed class AgeKnowledgeGraphRepositoryIntegrationTests : IAsyncLifetime
 
     /// <summary>
     /// Deletes every fact this test created, then proves the vertices are actually gone by
-    /// re-querying the graph directly — the same belt-and-suspenders shape
-    /// <see cref="TrackedDocumentCleanup"/> uses for documents.
+    /// re-querying the graph directly — see <see cref="TrackedFactCleanup"/>, which this class shares
+    /// with <see cref="KnowledgeContextFacadeEndToEndIntegrationTests"/>, and the same
+    /// belt-and-suspenders shape <see cref="TrackedDocumentCleanup"/> uses for documents.
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        foreach (var factId in _createdFactIds)
-        {
-            await _repository.DeleteAsync(factId);
-        }
-
-        if (_createdEntityNames.Count == 0)
-        {
-            return;
-        }
-
-        await using var context = await _contextFactory.CreateDbContextAsync();
-        var connection = context.Database.GetDbConnection();
-        await connection.OpenAsync();
-        try
-        {
-            await using (var setup = connection.CreateCommand())
-            {
-                setup.CommandText = "LOAD 'age'; SET search_path = ag_catalog, \"$user\", public;";
-                await setup.ExecuteNonQueryAsync();
-            }
-
-            var nameList = string.Join(", ", _createdEntityNames.Select(n => $"'{n}'"));
-
-            await using (var delete = connection.CreateCommand())
-            {
-                delete.CommandText = $@"
-                    SELECT * FROM cypher('{KnowledgeGraph.Name}', $$
-                        MATCH (n:Entity) WHERE n.name IN [{nameList}]
-                        DETACH DELETE n
-                    $$) as (result agtype);
-                ";
-                await delete.ExecuteNonQueryAsync();
-            }
-
-            // Belt-and-suspenders: prove the vertices are actually gone rather than assuming the
-            // DELETE above succeeded silently.
-            await using var verify = connection.CreateCommand();
-            verify.CommandText = $@"
-                SELECT * FROM cypher('{KnowledgeGraph.Name}', $$
-                    MATCH (n:Entity) WHERE n.name IN [{nameList}]
-                    RETURN n.name
-                $$) as (name agtype);
-            ";
-            await using var reader = await verify.ExecuteReaderAsync();
-            var remaining = await reader.ReadAsync();
-            if (remaining)
-            {
-                throw new InvalidOperationException(
-                    "Knowledge graph test cleanup left at least one tracked vertex behind.");
-            }
-        }
-        finally
-        {
-            await connection.CloseAsync();
-        }
+        await TrackedFactCleanup.DeleteTrackedFactsAsync(_repository, _contextFactory, _createdFactIds, _createdEntityNames);
     }
 
     /// <summary>
