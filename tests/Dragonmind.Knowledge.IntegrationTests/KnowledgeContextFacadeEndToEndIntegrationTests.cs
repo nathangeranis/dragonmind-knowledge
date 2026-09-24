@@ -17,8 +17,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
-using Moq;
-
 using Npgsql;
 
 using IDragonmindEmbeddingGenerator = Dragonmind.Core.AI.IEmbeddingGenerator;
@@ -76,6 +74,12 @@ public sealed class KnowledgeContextFacadeEndToEndIntegrationTests : IAsyncLifet
     /// does not re-run migrations, the collection fixture already did that once. This mirrors exactly
     /// what a host application wires: logging, a distributed cache, an
     /// <see cref="IDragonmindEmbeddingGenerator"/>, and <c>AddKnowledgeContext</c> itself.
+    /// <para>
+    /// xUnit v3 does not call <see cref="DisposeAsync"/> when this method throws, so nothing acquired
+    /// here before a throw would ever be cleaned up. Today the only step that can throw is
+    /// <see cref="BuildServiceProvider"/> (<c>ValidateOnBuild</c> rejecting the graph), and nothing
+    /// before it holds a resource; keep it that way, or clean up here before rethrowing.
+    /// </para>
     /// </summary>
     public ValueTask InitializeAsync()
     {
@@ -114,11 +118,7 @@ public sealed class KnowledgeContextFacadeEndToEndIntegrationTests : IAsyncLifet
         await RunTeardownStepAsync(() => TrackedDocumentCleanup.DeleteTrackedDocumentsAsync(
             _fixture.ContextFactory, _trackedScopeIds));
 
-        // Null when InitializeAsync failed before building it (e.g. ValidateOnBuild rejecting the
-        // graph); that failure is already reported, so teardown must not add a NullReferenceException.
-        await RunTeardownStepAsync(() => _serviceProvider is null
-            ? Task.CompletedTask
-            : _serviceProvider.DisposeAsync().AsTask());
+        await RunTeardownStepAsync(() => _serviceProvider.DisposeAsync().AsTask());
 
         if (failures.Count > 0)
         {
@@ -465,21 +465,13 @@ public sealed class KnowledgeContextFacadeEndToEndIntegrationTests : IAsyncLifet
     [Fact]
     public async Task StoreKnowledgeAsync_GeneratorReturnsNarrowVector_ThrowsAndPersistsNothing()
     {
-        // Arrange — a provider whose Microsoft.Extensions.AI stub returns 128 dimensions instead of
-        // the 1536 the pgvector column requires. This test builds its OWN container, because the
-        // embedding generator is wired once, at container build time.
+        // Arrange — a provider returning 128 dimensions instead of the EmbeddingDimensions.Default the
+        // pgvector column requires. This test builds its OWN container, because the embedding
+        // generator is wired once, at container build time.
         var scopeId = CreateTrackedScopeId();
 
-        var narrowGenerator = new Mock<IEmbeddingGenerator<string, Embedding<float>>>();
-        narrowGenerator
-            .Setup(g => g.GenerateAsync(
-                It.IsAny<IEnumerable<string>>(),
-                It.IsAny<EmbeddingGenerationOptions?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new GeneratedEmbeddings<Embedding<float>>(
-                new[] { new Embedding<float>(new float[128]) }));
-
-        await using var narrowServiceProvider = BuildServiceProvider(_fixture.DataSource, narrowGenerator.Object, _cache);
+        await using var narrowServiceProvider = BuildServiceProvider(
+            _fixture.DataSource, new HashingEmbeddingGenerator(dimensions: 128), _cache);
 
         // Act & Assert — the shipped ExtensionsAIEmbeddingGenerator refuses a shorter-than-expected
         // vector rather than let it reach the vector store.

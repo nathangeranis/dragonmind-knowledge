@@ -1,5 +1,7 @@
 using System.Text;
 
+using Dragonmind.Core.AI;
+
 using Microsoft.Extensions.AI;
 
 namespace Dragonmind.Knowledge.IntegrationTests;
@@ -13,8 +15,8 @@ namespace Dragonmind.Knowledge.IntegrationTests;
 /// <para>
 /// Lowercases the input, splits it into alphanumeric tokens, and hashes each token with FNV-1a
 /// (never <see cref="string.GetHashCode()"/>, whose result is randomized per process and would make
-/// this generator return a different vector for identical text across two test runs) into one of
-/// <see cref="Dimensions"/> buckets, then L2-normalizes the result. Two texts sharing vocabulary
+/// this generator return a different vector for identical text across two test runs) into one bucket
+/// per dimension, then L2-normalizes the result. Two texts sharing vocabulary
 /// produce vectors with positive cosine similarity; texts with disjoint vocabularies produce vectors
 /// with little to no overlap — good enough to exercise ranking and scope-filtering behavior without
 /// calling out to a real model.
@@ -22,7 +24,18 @@ namespace Dragonmind.Knowledge.IntegrationTests;
 /// </summary>
 internal sealed class HashingEmbeddingGenerator : IEmbeddingGenerator<string, Embedding<float>>
 {
-    private const int Dimensions = 1536;
+    private readonly int _dimensions;
+
+    /// <summary>
+    /// Creates a generator emitting vectors of <paramref name="dimensions"/> components. The default
+    /// is the width the Knowledge context stores; pass a different one only to test how the pipeline
+    /// treats a provider that returns the wrong width.
+    /// </summary>
+    public HashingEmbeddingGenerator(int dimensions = EmbeddingDimensions.Default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dimensions);
+        _dimensions = dimensions;
+    }
 
     /// <inheritdoc />
     public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
@@ -45,13 +58,13 @@ internal sealed class HashingEmbeddingGenerator : IEmbeddingGenerator<string, Em
         // Nothing to dispose: this generator holds no unmanaged or external resources.
     }
 
-    private static float[] HashToVector(string text)
+    private float[] HashToVector(string text)
     {
-        var vector = new float[Dimensions];
+        var vector = new float[_dimensions];
 
         foreach (var token in Tokenize(text))
         {
-            var bucket = (int)(Fnv1a(token) % Dimensions);
+            var bucket = (int)(Fnv1a(token) % (uint)_dimensions);
             vector[bucket] += 1f;
         }
 
