@@ -32,9 +32,12 @@ namespace Dragonmind.Knowledge.IntegrationTests;
 /// (<c>ValidationPipelineBehavior</c> and <c>LoggingPipelineBehavior</c>) to command/query handlers,
 /// through domain services, to the real pgvector and Apache AGE repositories, and back out as DTOs.
 /// <para>
-/// Every other integration test class in this project constructs a repository directly. None of them
-/// exercise DI wiring, the MediatR pipeline behaviors, the caching decorator, or the shipped
-/// <see cref="ExtensionsAIEmbeddingGenerator"/> adapter. This class closes that gap: every Act step
+/// None of the other integration test classes in this project go through the facade: most construct a
+/// repository directly, and <c>MigrationTests</c> drives the <c>DbContext</c> with raw SQL. So none of
+/// them exercise DI wiring, the MediatR pipeline behaviors, or the caching decorator against a live
+/// backend, and the shipped <see cref="ExtensionsAIEmbeddingGenerator"/> adapter had only run in unit
+/// tests against a mocked provider, never inside the <c>AddKnowledgeContext</c> graph. This class
+/// closes that gap: every Act step
 /// below goes through <see cref="IKnowledgeContextFacade"/>. Raw repository instances are used only
 /// for "nothing was persisted" assertions and for teardown.
 /// </para>
@@ -91,27 +94,21 @@ public sealed class KnowledgeContextFacadeEndToEndIntegrationTests : IAsyncLifet
     }
 
     /// <summary>
-    /// Collects every fact id under this test's tracked scopes via a raw repository read (the facade
-    /// itself only ever returns <c>bool</c> from a fact write, never the id it was assigned), then
-    /// hands off to the same tracked-cleanup helpers the rest of this project uses.
+    /// Hands off to the same tracked-cleanup helpers the rest of this project uses. No fact ids are
+    /// passed: the facade never returns the id it assigned, and it does not need to, because every
+    /// fact this class writes has both endpoints minted by <see cref="CreateUniqueEntityName"/>, so the
+    /// name-based <c>DETACH DELETE</c> in <see cref="TrackedFactCleanup"/> removes each edge along
+    /// with its vertices.
     /// </summary>
     public async ValueTask DisposeAsync()
     {
         // Nested try/finally, not a straight sequence: graph cleanup throws on purpose when a tracked
-        // vertex survives, and a transient AGE read can throw too. Either must still leave this test's
-        // documents deleted and its provider disposed, or one failure would leak rows into the shared
-        // table for every later test class.
+        // vertex survives. That must still leave this test's documents deleted and its provider
+        // disposed, or one failure would leak rows into the shared table for every later test class.
         try
         {
-            var trackedFactIds = new List<FactId>();
-            foreach (var scopeId in _trackedScopeIds)
-            {
-                var facts = await _rawGraphRepository.GetByScopeIdAsync(scopeId);
-                trackedFactIds.AddRange(facts.Select(f => f.Id));
-            }
-
             await TrackedFactCleanup.DeleteTrackedFactsAsync(
-                _rawGraphRepository, _fixture.ContextFactory, trackedFactIds, _trackedEntityNames);
+                _rawGraphRepository, _fixture.ContextFactory, Array.Empty<FactId>(), _trackedEntityNames);
         }
         finally
         {
@@ -146,7 +143,15 @@ public sealed class KnowledgeContextFacadeEndToEndIntegrationTests : IAsyncLifet
                 EmbeddingDimensions.Default,
                 provider.GetRequiredService<ILogger<ExtensionsAIEmbeddingGenerator>>()));
         services.AddKnowledgeContext(dataSource);
-        return services.BuildServiceProvider();
+
+        // The validation a host gets by default in Development: a captive dependency (a singleton
+        // holding a scoped service) or an unresolvable registration fails the build here, instead of
+        // resolving silently the way a default-options provider would let it.
+        return services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true,
+        });
     }
 
     /// <summary>
@@ -332,9 +337,10 @@ public sealed class KnowledgeContextFacadeEndToEndIntegrationTests : IAsyncLifet
         Assert.True(await UseFacadeAsync(f => f.AddKnowledgeFactAsync(x, "DEPENDS_ON", y, scopeA)));
         Assert.True(await UseFacadeAsync(f => f.AddKnowledgeFactAsync(y, "DEPENDS_ON", z, scopeB)));
 
-        // Act — read from both sides of the shared vertex, each in its own scope. Both go through the
-        // caching decorator, so this also pins that the cache key is scope-qualified: a key that
-        // dropped its scope segment would serve one scope's fact list to the other.
+        // Act — read from both sides of the shared vertex, each in its own scope. This pins the
+        // traversal, not the cache key: each scope has its own random generation token, so the two
+        // reads could never share a cache entry even if the key lost its scope segment. That property
+        // is pinned directly by KnowledgeCacheServiceTests.GetOrLoadRelatedFactsAsync_KeyContainsScopeAndGeneration.
         var relatedInA = await UseFacadeAsync(f => f.GetRelatedFactsAsync(x, scopeA, maxDepth: 2));
         var relatedInB = await UseFacadeAsync(f => f.GetRelatedFactsAsync(y, scopeB, maxDepth: 2));
 
@@ -430,7 +436,9 @@ public sealed class KnowledgeContextFacadeEndToEndIntegrationTests : IAsyncLifet
     [Fact]
     public async Task SearchKnowledgeAsync_EmptyQuery_ThrowsArgumentException()
     {
-        // Arrange — SearchKnowledgeQuery's constructor validates before MediatR ever sees the request.
+        // Arrange — the guard still fires when the facade is resolved from the real DI graph. That it
+        // fires BEFORE dispatch is proven separately, with a strict IMediator, by
+        // KnowledgeContextFacadeTests.SearchKnowledgeAsync_BlankQuery_ThrowsBeforeDispatch.
         var scopeId = ScopeId.New();
 
         // Act & Assert

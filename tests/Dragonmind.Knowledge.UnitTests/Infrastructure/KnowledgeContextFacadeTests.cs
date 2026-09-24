@@ -120,6 +120,19 @@ public class KnowledgeContextFacadeTests
         mediator.Verify(m => m.Send(It.IsAny<SearchKnowledgeQuery>(), cts.Token), Times.Once);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SearchKnowledgeAsync_BlankQuery_ThrowsBeforeDispatch(string query)
+    {
+        // A strict mock with no setups is the tripwire: any Send would throw MockException instead
+        // of ArgumentException, so the assertion below holds only if the guard fired before dispatch.
+        var mediator = new Mock<IMediator>(MockBehavior.Strict);
+        var facade = new KnowledgeContextFacade(mediator.Object);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => facade.SearchKnowledgeAsync(query, ScopeId.New()));
+    }
+
     #endregion
 
     #region StoreKnowledgeAsync
