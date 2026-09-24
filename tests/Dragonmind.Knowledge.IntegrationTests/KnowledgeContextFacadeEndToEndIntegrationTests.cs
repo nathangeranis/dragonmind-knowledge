@@ -102,23 +102,38 @@ public sealed class KnowledgeContextFacadeEndToEndIntegrationTests : IAsyncLifet
     /// </summary>
     public async ValueTask DisposeAsync()
     {
-        // Nested try/finally, not a straight sequence: graph cleanup throws on purpose when a tracked
-        // vertex survives. That must still leave this test's documents deleted and its provider
-        // disposed, or one failure would leak rows into the shared table for every later test class.
-        try
+        // Every step runs even if an earlier one throws, and every failure is reported. Graph cleanup
+        // throws on purpose when a tracked vertex survives, and nested try/finally would let a later
+        // step's exception silently replace that one. Skipping a step is not an option either: leaving
+        // documents behind or the provider undisposed leaks into every later test class sharing the
+        // database. Cancellation is not a cleanup failure, so it still propagates.
+        var failures = new List<Exception>();
+
+        await RunTeardownStepAsync(() => TrackedFactCleanup.DeleteTrackedFactsAsync(
+            _rawGraphRepository, _fixture.ContextFactory, Array.Empty<FactId>(), _trackedEntityNames));
+        await RunTeardownStepAsync(() => TrackedDocumentCleanup.DeleteTrackedDocumentsAsync(
+            _fixture.ContextFactory, _trackedScopeIds));
+
+        // Null when InitializeAsync failed before building it (e.g. ValidateOnBuild rejecting the
+        // graph); that failure is already reported, so teardown must not add a NullReferenceException.
+        await RunTeardownStepAsync(() => _serviceProvider is null
+            ? Task.CompletedTask
+            : _serviceProvider.DisposeAsync().AsTask());
+
+        if (failures.Count > 0)
         {
-            await TrackedFactCleanup.DeleteTrackedFactsAsync(
-                _rawGraphRepository, _fixture.ContextFactory, Array.Empty<FactId>(), _trackedEntityNames);
+            throw new AggregateException("Test teardown did not complete cleanly.", failures);
         }
-        finally
+
+        async Task RunTeardownStepAsync(Func<Task> step)
         {
             try
             {
-                await TrackedDocumentCleanup.DeleteTrackedDocumentsAsync(_fixture.ContextFactory, _trackedScopeIds);
+                await step();
             }
-            finally
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                await _serviceProvider.DisposeAsync();
+                failures.Add(ex);
             }
         }
     }
@@ -436,8 +451,9 @@ public sealed class KnowledgeContextFacadeEndToEndIntegrationTests : IAsyncLifet
     [Fact]
     public async Task SearchKnowledgeAsync_EmptyQuery_ThrowsArgumentException()
     {
-        // Arrange — the guard still fires when the facade is resolved from the real DI graph. That it
-        // fires BEFORE dispatch is proven separately, with a strict IMediator, by
+        // Arrange — an empty query sent through the facade built by the real DI graph is rejected with
+        // ArgumentException. Several layers guard the same input with the same exception type, so this
+        // cannot show which one fired; that the facade's own guard fires BEFORE dispatch is pinned by
         // KnowledgeContextFacadeTests.SearchKnowledgeAsync_BlankQuery_ThrowsBeforeDispatch.
         var scopeId = ScopeId.New();
 
